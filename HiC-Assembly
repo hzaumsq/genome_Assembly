@@ -1,0 +1,65 @@
+#! /bin/bash
+
+##########################################
+# ARIMA GENOMICS MAPPING PIPELINE 100617 #
+##########################################
+
+#Below find the commands used to map HiC data. 
+
+#Replace the variables at the top with the correct paths for the locations of files/programs on your system. 
+
+#This bash script will map one paired end HiC dataset (read1 & read2 fastqs). Feel to modify and multiplex as you see fit to work with your volume of samples and system. 
+
+
+##########################################
+# Commands 
+# The dir just for the absolutely paths,check it carefully !!!  when you qsub your jobs it need for 24 threads ,meanwhile the R1 R2 must end with the _R1.fastq or _R2.fastq.
+##########################################
+#The following tools will be used in the whole pipeline,the pipeline just apply in dxbo@150
+
+BWA='bwa'
+SAMTOOLS='samtools'
+SAMBAMBA='sambamba'
+PreprocessSAMs='PreprocessSAMs.pl'
+filterBAM_forHiC='filterBAM_forHiC.pl'
+Trim_galore="trim_galore"
+
+SRA='Female_Rep1'               					# The sample name
+
+IN_DIR='/public/home/dxbo/msq/sample/female/3WHF4-1FemaleHiC'          #The idr of fastq files
+
+REF='/public/home/dxbo/msq/polish/polish.fasta'                          #The reference fasta
+
+Thread="24"
+
+# Step1,ADapter remove;
+$Trim_galore -q 25 --phred33 --length 35 -e 0.1 --stringency 4 --paired $IN_DIR/$SRA\_R1.fastq $IN_DIR/$SRA\_R2.fastq -o ./
+
+#单端比对 （严格比对参数 -n 0 ）
+echo "### Step 1.A: FASTQ to BAM (1st)"
+$BWA aln -n 0 -t $Thread $REF $IN_DIR/$SRA\_R1_val_1.fq > $IN_DIR/$SRA\_R1.sai
+echo "### Step 1.B: FASTQ to BAM (2nd)"
+$BWA aln -n 0 -t $Thread $REF $IN_DIR/$SRA\_R2_val_2.fq > $IN_DIR/$SRA\_R2.sai
+
+#双端合并
+echo "### Step 1.C: FASTQ to BAM (3nd)"
+$BWA sampe $REF $IN_DIR/$SRA\_R1.sai $IN_DIR/$SRA\_R2.sai $IN_DIR/$SRA\_R1_val_1.fq $IN_DIR/$SRA\_R2_val_2.fq > $IN_DIR/$SRA\.sam
+
+#reads 过滤
+echo "### Step 2.: filter the BAM file of PCR duplication"
+$PreprocessSAMs $IN_DIR/$SRA\.sam $REF MBOI
+
+#过滤PCR重复
+echo "### Step 3.remove the PCR Depucation use sambamba (1st)"
+$SAMBAMBA markdup -t $Thread -r $IN_DIR/$SRA\.REduced.bam $IN_DIR/$SRA\_nodup.REduced.bam
+
+#格式的调整适用于Lachesis
+echo "### Step 4.Use samtools to sort the header"
+$SAMTOOLS view -@ $Thread -F12 $IN_DIR/$SRA\_nodup.REduced.bam -b -o $IN_DIR/$SRA\_nodup_only.REduced.bam
+echo "### Step 5.Use perl filter the low quantity reads"
+$filterBAM_forHiC $IN_DIR/$SRA\_nodup_only.REduced.bam $IN_DIR/$SRA\_clean.sam
+
+echo "### Step 6.To convert the format for Lachesis"
+$SAMTOOLS view -@ $Thread -bt $FAI $IN_DIR/$SRA\_clean.sam > $IN_DIR/$SRA\_clean.bam
+
+echo "### Step 8.Finish!"

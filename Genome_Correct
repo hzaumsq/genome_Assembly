@@ -1,0 +1,44 @@
+#!/bin/bash
+##########################################
+# ARIMA GENOMICS MAPPING PIPELINE 100617 #
+##########################################
+
+#Below find the commands used to map ATAC-seq data. 
+
+#Replace the variables at the top with the correct paths for the locations of files/programs on your system. 
+
+#This bash script will map one paired end HiC dataset (read1 & read2 fastqs). Feel to modify and multiplex as you see fit to work with your volume of samples and system.
+
+#The Pacbio sequence
+set -e
+set -o pipefail
+set -u
+
+REF=$1
+BAM=$2
+THREADS=100
+source activate pb-assembly
+samtools faidx $REF
+
+pbalign --tmpDir=./ --nproc=${THREADS} --minAccuracy=0.75 --minLength=50 \
+    --minAnchorSize=12 --maxDivergence=30 --concordant --algorithm=blasr \
+    --algorithmOptions=--useQuality --maxHits=1 --hitPolicy=random --seed=1 \
+    $BAM ${REF} aln.bam
+
+variantCaller --algorithm=arrow -x 5 -X 120 -q 20 -j 24 \
+    -r $REF aln.bam -o cns.fasta -o cns.fastq
+
+
+# Use the illumina data to correct the genome SNPs,indels............
+bwa mem -t {THREADS} ${REF} WHF4-1_clean_r1.fq.gz WHF4-1_clean_r2.fq.gz | samtools sort \
+-@  {THREADS} -O bam > align.bam
+
+samtools index -@ {THREADS} align.bam
+
+java -jar /public/home/csxie/ddd/MgF1-1/picard-tools-1.124/picard.jar MarkDuplicates I=align.bam \
+O=align_Mask.bam M=align.dup_metrics AS=true REMOVE_DUPLICATES=true 
+
+samtools view -@ {THREADS} -q 30 align_Mask.bam > align_filter.bam
+
+java -jar -Xmx600G /public/home/csxie/msq/tool/pilon-1.22.jar --mindepth 10 --changes --threads {THREADS} \
+--genome {REF} --frags align_filter.bam --fix snps,indels --output pilon1
